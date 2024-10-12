@@ -9,7 +9,7 @@ ratings = pd.read_csv("BX-Book-Ratings.csv", encoding="cp1251", sep=";")
 ratings = ratings[ratings["Book-Rating"] != 0]
 
 # load books
-books = pd.read_csv("BX-Books.csv", encoding="cp1251", sep=";", error_bad_lines=False)
+books = pd.read_csv("BX-Books.csv", encoding="cp1251", sep=";", on_bad_lines="skip")
 
 # users_ratigs = pd.merge(ratings, users, on=['User-ID'])
 dataset = pd.merge(ratings, books, on=["ISBN"])
@@ -68,7 +68,7 @@ worst_list = []
 for LoR_book in LoR_list:
 
     # Take out the Lord of the Rings selected book from correlation dataframe
-    dataset_of_other_books = dataset_for_corr.copy(deep=False)
+    dataset_of_other_books = dataset_for_corr.copy(deep=True)
     dataset_of_other_books.drop([LoR_book], axis=1, inplace=True)
 
     # empty lists
@@ -84,10 +84,10 @@ for LoR_book in LoR_list:
         )
         tab = (
             ratings_data_raw[ratings_data_raw["Book-Title"] == book_title]
-            .groupby(ratings_data_raw["Book-Title"])
+            .groupby(ratings_data_raw["Book-Title"])["Book-Rating"]
             .mean()
         )
-        avgrating.append(tab["Book-Rating"].min())
+        avgrating.append(tab.min())
     # final dataframe of all correlation of each book
     corr_fellowship = pd.DataFrame(
         list(zip(book_titles, correlations, avgrating)),
@@ -103,4 +103,9 @@ for LoR_book in LoR_list:
 
 print("Correlation for book:", LoR_list[0])
 # print("Average rating of LOR:", ratings_data_raw[ratings_data_raw['Book-Title']=='the fellowship of the ring (the lord of the rings, part 1'].groupby(ratings_data_raw['Book-Title']).mean()))
-rslt = result_list[0]
+
+print("Best")
+print(result_list)
+
+print("Worst")
+print(worst_list)
