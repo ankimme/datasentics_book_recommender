@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <script
+            src="https://code.jquery.com/jquery-3.7.1.min.js"
+            integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo="
+            crossorigin="anonymous"
+        ></script>
+        <script src="script.js"></script>
+        <link rel="stylesheet" href="style.css" />
+        <title>Book Recommender</title>
+    </head>
+
+    <body>
+        <h1>Book Recommender</h1>
+        <input type="text" id="inputText" />
+        <button id="recommendBtn"">Recommend!</button>
+        <button id="clearBtn"">Clear</button>
+
+        
+        <h2>What to read</h2>
+        <ol>
+            <div id="resultPositives"></div>
+        </ol>
+        
+
+        <h2>What not to read</h2>
+        <ol>
+            <div id="resultNegatives"></div>
+        </ol>
+    </body>
+</html>
