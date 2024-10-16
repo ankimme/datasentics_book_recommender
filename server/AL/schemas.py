@@ -2,5 +2,6 @@ from pydantic import BaseModel
 
 
 class BookRatingModel(BaseModel):
-    name: str
-    rating: float
+    title: str
+    avg_rating: float
+    correlation_idx: float

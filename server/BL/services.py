@@ -8,22 +8,13 @@ import pandas as pd
 class BookService:
 
     def __init__(self):
-        self.db_connection_string = "postgresql://admin:admin@localhost/book_db"  # TODO this really should not be here :)
+        self.db_connection_string = "postgresql://admin:admin@localhost/book_db"  # TODO this really should not be here :) probably should be implemented as a dependency or at least put in a config file
 
     def calculate_positives(
-        self, book_name: str, count: int = 10
+        self, book_name: str, count: int = 15
     ) -> list[BookRatingModel]:
-
-        query = """SELECT *
-                   FROM book
-                   INNER JOIN book_rating ON book.id=book_rating.book_id
-                   WHERE rating != 0"""
-
-        # Retrieve data and load it into a DataFrame
-        with psycopg2.connect(self.db_connection_string) as conn:
-            df = pd.read_sql_query(query, conn)
-
-        result = self._run_algorithm(df, book_name)
+        result = self._run_recommendation_algorithm(book_name, count)
+        print(result)
 
         return result
 
@@ -32,99 +23,108 @@ class BookService:
     ) -> list[BookRatingModel]:
         raise NotImplementedError()
 
-    def _run_algorithm(
+    def _run_recommendation_algorithm(
         self,
-        df: pd.DataFrame,
         book_name: str,
+        count: int,
     ):
-        # TODO this is still ugly and hardcoded
-        dataset_lowercase = df.apply(
-            lambda x: x.str.lower() if (x.dtype == "object") else x
+        book_name = book_name.strip().lower()
+
+        df = self._load_book_ratings()
+        df = self._filter_ratings_by_relevant_users(df, book_name)
+        df = self._filter_ratings_by_min_count(df, book_name, 8)
+        avg = df.loc[:, ["title", "rating"]].groupby(by="title").agg("mean")
+        df = self._aggregate_by_user_and_book(df)
+
+        recommendations = self._calculate_recommendations(df, avg, book_name)
+
+        # prepare data for pydantic model BookRatingModel
+        return recommendations.head(count).to_dict(orient="records")
+
+    def _load_book_ratings(self) -> pd.DataFrame:
+        """Load all explicit book ratings into a dataframe with book id as index. Set title to lowercase to simplify string comparison."""
+        query = """SELECT book.id AS book_id, title, user_id, rating
+                   FROM book
+                   INNER JOIN book_rating ON book.id=book_rating.book_id
+                   WHERE rating != 0"""
+
+        with psycopg2.connect(self.db_connection_string) as conn:
+            df = pd.read_sql_query(query, conn)
+
+        df = df.set_index("book_id")
+        df["title"] = df["title"].str.lower()
+
+        return df
+
+    def _filter_ratings_by_relevant_users(
+        self, df: pd.DataFrame, book_name: str
+    ) -> pd.DataFrame:
+        """Filter only reviews that were made by users who read (reviewed) the input book."""
+
+        reference_book_reviews_df = df[df["title"] == book_name]
+
+        from fastapi import HTTPException
+
+        if len(reference_book_reviews_df) == 0:
+            raise HTTPException(status_code=404, detail="Book title not found.")
+
+        relevant_users = reference_book_reviews_df["user_id"].unique()
+
+        candidate_reviews_df = df[df["user_id"].isin(relevant_users)]
+
+        return candidate_reviews_df
+
+    def _filter_ratings_by_min_count(
+        self, df: pd.DataFrame, book_name: str, N: int
+    ) -> pd.DataFrame:
+        """Filter only books that were reviewed at least N times."""
+
+        review_count_df = df.groupby("title").agg("count").reset_index()
+        filtered_reviews_df = review_count_df[review_count_df["rating"] >= N]
+        relevant_books = filtered_reviews_df["title"].to_list()
+
+        # make sure that the input book is not filtered out of the dataframe
+        if book_name not in relevant_books:
+            relevant_books.append(book_name)
+
+        result = df[df["title"].isin(relevant_books)]
+
+        return result
+
+    def _aggregate_by_user_and_book(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Aggregate the reviews by a combination of book title and user id. If a user reviewed a single book multiple times, take the average value.
+
+        Note
+        ----
+        Leads to a loss of the original index of the dataframe.
+        """
+        aggregated_df = df.groupby(["user_id", "title"]).agg("mean")
+        aggregated_df = aggregated_df.reset_index()
+        return aggregated_df
+
+    def _calculate_recommendations(
+        self, df: pd.DataFrame, avg: pd.DataFrame, book_name: str
+    ) -> pd.DataFrame:
+        """Calculate a dataframe with correlations that determine the most recommended books."""
+        candidate_books = df["title"].unique().tolist()
+        candidate_books.remove(book_name)
+
+        pivot_table = df.pivot(index="user_id", columns="title", values="rating")
+
+        scores = []
+
+        for candidate_title in candidate_books:
+            correlation = pivot_table[book_name].corr(pivot_table[candidate_title])
+            avg_rating = avg.loc[candidate_title].item()
+
+            scores.append((candidate_title, avg_rating, correlation))
+
+        recommended_books_df = pd.DataFrame(
+            scores, columns=["title", "avg_rating", "correlation_idx"]
         )
-        tolkien_readers = dataset_lowercase["user_id"][
-            (
-                dataset_lowercase["title"]
-                == "the fellowship of the ring (the lord of the rings, part 1)"
-            )
-            & (dataset_lowercase["author"].str.contains("tolkien"))
-        ]
-        tolkien_readers = tolkien_readers.tolist()
-        tolkien_readers = np.unique(tolkien_readers)
 
-        # final dataset
-        books_of_tolkien_readers = dataset_lowercase[
-            (dataset_lowercase["user_id"].isin(tolkien_readers))
-        ]
-
-        # Number of ratings per other books in dataset
-        number_of_rating_per_book = (
-            books_of_tolkien_readers.groupby(["title"]).agg("count").reset_index()
+        recommended_books_df = recommended_books_df.sort_values(
+            by=["correlation_idx"], ascending=False
         )
 
-        # select only books which have actually higher number of ratings than threshold
-        books_to_compare = number_of_rating_per_book["title"][
-            number_of_rating_per_book["user_id"] >= 8
-        ]
-        books_to_compare = books_to_compare.tolist()
-
-        ratings_data_raw = books_of_tolkien_readers[["user_id", "rating", "title"]][
-            books_of_tolkien_readers["title"].isin(books_to_compare)
-        ]
-
-        # group by User and Book and compute mean
-        ratings_data_raw_nodup = ratings_data_raw.groupby(["user_id", "title"])[
-            "rating"
-        ].mean()
-
-        # reset index to see User-ID in every row
-        ratings_data_raw_nodup = ratings_data_raw_nodup.to_frame().reset_index()
-
-        dataset_for_corr = ratings_data_raw_nodup.pivot(
-            index="user_id", columns="title", values="rating"
-        )
-
-        LoR_list = ["the fellowship of the ring (the lord of the rings, part 1)"]
-
-        result_list = []
-        worst_list = []
-
-        # for each of the trilogy book compute:
-        for LoR_book in LoR_list:
-
-            # Take out the Lord of the Rings selected book from correlation dataframe
-            dataset_of_other_books = dataset_for_corr.copy(deep=True)
-            dataset_of_other_books.drop([LoR_book], axis=1, inplace=True)
-
-            # empty lists
-            book_titles = []
-            correlations = []
-            avgrating = []
-
-            # corr computation
-            for book_title in list(dataset_of_other_books.columns.values):
-                book_titles.append(book_title)
-                correlations.append(
-                    dataset_for_corr[LoR_book].corr(dataset_of_other_books[book_title])
-                )
-                tab = (
-                    ratings_data_raw[ratings_data_raw["title"] == book_title]
-                    .groupby(ratings_data_raw["title"])["rating"]
-                    .mean()
-                )
-                avgrating.append(tab.min())
-            # final dataframe of all correlation of each book
-            corr_fellowship = pd.DataFrame(
-                list(zip(book_titles, correlations, avgrating)),
-                columns=["book", "corr", "avg_rating"],
-            )
-            corr_fellowship.head()
-
-            a = []
-            for _, row in (
-                corr_fellowship.sort_values("corr", ascending=False).head(10).iterrows()
-            ):
-                a.append(
-                    BookRatingModel(name=str(row.book), rating=float(row.avg_rating))
-                )
-
-            return a
+        return recommended_books_df

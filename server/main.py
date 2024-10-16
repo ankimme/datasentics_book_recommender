@@ -30,9 +30,7 @@ def read_root():
 def get_positives(
     service: Annotated[BookService, Depends()], book_name: str
 ) -> list[BookRatingModel]:
-    return service.calculate_positives(
-        "the fellowship of the ring (the lord of the rings, part 1)"
-    )
+    return service.calculate_positives(book_name)
 
 
 @app.get("/negatives/{book_name}")
